@@ -47,6 +47,7 @@ response = requests.get(file_url)
 df = pd.read_csv(io.BytesIO(response.content))
 sorted_df=df[['Description', 'SKU', 'Brand', 'Available Quantity']].copy()
 sorted_df["SKU"]=sorted_df["SKU"].str.replace("`", "").str.strip()
+sorted_df=sorted_df.groupby(['Description', 'SKU', 'Brand'])['Available Quantity'].sum().reset_index()
 scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
 creds = ServiceAccountCredentials.from_json_keyfile_name('./emerald-cab-384306-b8566336d0b0.json', scope)
 client = gspread.authorize(creds)
