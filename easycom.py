@@ -6,75 +6,56 @@ from gspread_dataframe import set_with_dataframe
 from oauth2client.service_account import ServiceAccountCredentials
 import datetime
 import pytz
-
-BaseURL = "https://api.easyecom.io"
-url = f"{BaseURL}/access/token"
+url = "https://api.easyecom.io/getApiToken"
 email = "karan.ahirwar@selectbrands.in"
 password = "Annu@2023"
-location_key = "en11797218225"
 payload = {
     "email": email,
-    "password": password,
-    "location_key": location_key
+    "password": password
 }
-
-try:
-    response = requests.post(url, json=payload)
-    if response.status_code == 200:
-        data = response.json()
-        access_token = data["data"]["token"]["jwt_token"]
-        print("Credentials created successfully.")
-    else:
-        print(f"Error: API request failed with status code {response.status_code}")
-        print("Response:", response.text)
-except requests.exceptions.RequestException as e:
-    print(f"Error: {e}")
-
-x_api_key = "0f68a914017e171f9335ddea23a55f842f71d0b5"
-
-# Get the current date and time in Indian Standard Time (IST)
-ist = pytz.timezone('Asia/Kolkata')
-current_datetime_ist = datetime.datetime.now(ist)
-current_date_ist = current_datetime_ist.date()
-
-# Calculate yesterday's date
-yesterday_date_ist = current_date_ist - datetime.timedelta(days=1)
-
-# Format the dates to match the expected date format in the API
-current_datetime_str = current_datetime_ist.strftime("%Y-%m-%d %H:%M:%S")
-current_date_str = current_date_ist.strftime("%Y-%m-%d")
-yesterday_date_str = yesterday_date_ist.strftime("%Y-%m-%d")
-
-# Update the inventory endpoint URL with yesterday's date as the start date and today's date as the end date
-inventory_endpoint = f"{BaseURL}/inventory/getInventorySnapshotApi?start_date={yesterday_date_str} 00:00:00&end_date={current_date_str} 23:59:59"
-
-headers = {
-    "Authorization": f"Bearer {access_token}",
-    "x-api-key": x_api_key
+headers = {}
+response = requests.request("POST", url, headers=headers, data=payload)
+data = response.json()
+api_token = data['data']["api_token"]
+BaseURL = "https://api.easyecom.io"
+inventory_url = f"{BaseURL}/wms/V2/getInventoryDetails"
+params = {
+    "api_token": api_token,
+    "includeLocations": "1"
 }
+final = pd.DataFrame()
+while inventory_url:
+    try:
+        response = requests.get(inventory_url, params=params)
+        response.raise_for_status()
+        data_raw = response.json()
+        if "data" in data_raw and "inventoryData" in data_raw["data"]:
+            df = pd.DataFrame(data_raw["data"]["inventoryData"])
+            final = pd.concat([final, df], ignore_index=True)
 
-try:
-    response = requests.get(inventory_endpoint, headers=headers)
-    if response.status_code == 200:
-        data = response.json()
-        print("Inventory data is generated")
-    else:
-        print(f"Error: API request failed with status code {response.status_code}")
-        print("Response:", response.text)
-except requests.exceptions.RequestException as e:
-    print(f"Error: {e}")
+        if "data" in data_raw and "nextUrl" in data_raw["data"]:
+            inventory_url = f"{BaseURL}{data_raw['data']['nextUrl']}"
+        else:
+            inventory_url = None
 
-file_url = data["data"][0]["file_url"]
-response = requests.get(file_url)
-df = pd.read_csv(io.BytesIO(response.content))
-sorted_df = df[['Description', 'SKU', 'Brand', 'Available Quantity']].copy()
-sorted_df["SKU"] = sorted_df["SKU"].str.replace("`", "").str.strip()
-sorted_df=sorted_df.groupby(['Description', 'SKU', 'Brand'])['Available Quantity'].sum().reset_index()
+    except requests.exceptions.RequestException as e:
+        print("An error occurred during the request:", e)
+        break
+
+    except Exception as e:
+        print("An unexpected error occurred:", e)
+        break
+final_raw=final[['description','sku',"brand",'companyId', 'companyName', 'location_key', 'companyProductId',
+       'productId','reservedInventory','availableInventory', 'creationDate','lastUpdateDate']].copy()
+final_raw["reservedInventory"]=final_raw["reservedInventory"].fillna(0)
+final_raw["availableInventory"]=final_raw["availableInventory"].fillna(0)
+final_raw["creationDate"]=pd.to_datetime(final_raw["creationDate"]).dt.date
+final_raw["lastUpdateDate"]=pd.to_datetime(final_raw["lastUpdateDate"]).dt.date
 scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
 creds = ServiceAccountCredentials.from_json_keyfile_name('./emerald-cab-384306-b8566336d0b0.json', scope)
 client = gspread.authorize(creds)
 gsB2c = client.open('Easycom_Live_Inventory')
 sheetb2c = gsB2c.worksheet('Raw')
 sheetb2c.clear()
-set_with_dataframe(sheetb2c, sorted_df)
+set_with_dataframe(sheetb2c,final_raw)
 print("Data Is Saved Successfully.")
